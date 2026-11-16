@@ -1,0 +1,35 @@
+name: Publish clean source tree
+on:
+  push:
+    paths:
+      - '.github/workflows/publish-source.yml'
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and expand sanitized snapshot
+        shell: python
+        run: |
+          import pathlib, hashlib, zipfile
+          archives = list(pathlib.Path('.').glob('*pulse-clean-source.zip'))
+          assert len(archives) == 1, 'Expected one source archive'
+          archive = archives[0]
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == '67d6b8d06ec56991086eabaf08130bc4e8acc88ee6f415c9f7ceb8256c077402'
+          with zipfile.ZipFile(archive) as z:
+              for item in z.infolist():
+                  p = pathlib.PurePosixPath(item.filename)
+                  assert not p.is_absolute() and '..' not in p.parts
+                  assert p.parts[0] in {'src','scripts','test','assets','README.md','package.json','package-lock.json','.env.example','.gitignore'}
+              z.extractall('.')
+          archive.unlink()
+      - name: Commit source tree
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Publish clean standalone Pulse source tree'
+          git push
