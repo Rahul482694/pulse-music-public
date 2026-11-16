@@ -1,0 +1,17 @@
+node_modules
+.env
+data
+preview
+*.log
+
+# Host-only source/settings recovery snapshots
+.profile-history/
+.feature-history/
+
+data/
+
+# Private runtime auth material must never be tracked.
+**/.web-sessions.json*
+**/.oauth-client-secret
+.feature-staging/
+.feature-history/

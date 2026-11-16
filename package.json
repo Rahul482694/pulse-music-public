@@ -1,0 +1,20 @@
+{
+  "name": "pulse-music",
+  "version": "1.0.0",
+  "description": "Minimal Discord music bot with a live cover-art player card and multi-node Lavalink failover.",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node test/offline.test.js",
+    "nodes:check": "node scripts/check-nodes.js",
+    "preview": "node scripts/render-preview.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.1.1",
+    "discord.js": "^14.28.1",
+    "dotenv": "^18.0.10",
+    "lavalink-client": "^2.11.0"
+  }
+}

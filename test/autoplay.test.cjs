@@ -1,0 +1,22 @@
+'use strict';
+const assert=require('assert/strict'),fs=require('fs'),vm=require('vm'),path=require('path');
+let on=true,recCount=12;const rec=require('../src/recommendations');const provider={...rec,recommend:async()=>({language:'hindi',tracks:Array.from({length:recCount},(_,n)=>({id:'track'+String(n+1).padStart(6,'0'),title:'Song '+(n+1),artists:[{name:'Catalogue Artist',id:'UCartist'}],duration:200,identity:'song '+(n+1),reason:'Song radio'}))})};const moduleMock={exports:{}};
+vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/autoplay.js'),'utf8'),{module:moduleMock,require:n=>n==='./store'?{get:()=>({autoplay:on})}:n==='./recommendations'?provider:require(n)});
+const auto=moduleMock.exports;
+const song=n=>({encoded:'encoded-'+n,info:{title:'Song '+n,author:'Sample Composer',identifier:'track'+String(n).padStart(6,'0'),uri:'https://example.org/track/'+n,sourceName:'youtube',duration:200000},requester:{id:'human'}});
+const seed=song(0),p={guildId:'g',node:{id:'node'},queue:{current:seed,tracks:[],previous:[],add:async function(t){this.tracks.push(t);}},LavalinkManager:{}};
+let searches=0;const search=async(_,q)=>{searches++;const n=Number(q.split('track')[1]);return{nodeId:'node',res:{tracks:[song(n)]}}};
+(async()=>{
+ await auto.prepare(p,seed,search);let v=auto.view(p);assert.equal(v.tracks.length,5);assert.equal(p.queue.tracks.length,0,'candidates must not enter human queue');
+ const removed=v.tracks[0].id;assert.equal(auto.dismiss(p,removed,'stale'),false);assert.equal(auto.dismiss(p,removed,v.version),true);await auto.prepare(p,seed,search);assert.equal(auto.view(p).tracks.length,4,'dismiss must not immediately refill');
+ p.queue.current=song(20);await auto.prepare(p,p.queue.current,search);assert.equal(auto.view(p).tracks.length,5);assert.equal(auto.view(p).tracks.some(t=>t.id===removed),false,'dismissed candidate must remain excluded');
+ const humans=[song(40),song(41)];p.queue.tracks.push(...humans);auto.manual(p);assert.equal(auto.view(p).tracks.length,0);await auto.prepare(p,seed,search);assert.deepEqual(p.queue.tracks,humans);await auto.next(p,seed,search);assert.deepEqual(p.queue.tracks,humans,'autoplay must not replace or jump human queue');
+ p.queue.tracks=[];auto.manual(p);let release;const delayed=()=>new Promise(r=>release=r);const filling=auto.prepare(p,seed,delayed);await new Promise(setImmediate);auto.manual(p);p.queue.tracks.push(humans[0]);release({nodeId:'node',res:{tracks:[song(70)]}});await filling;assert.equal(auto.view(p).tracks.length,0,'late suggestion generation must lose to manual add');assert.equal(p.queue.tracks[0],humans[0]);
+ p.queue.tracks=[];auto.manual(p);const waiting=auto.next(p,seed,delayed);await new Promise(setImmediate);auto.manual(p);p.queue.current=humans[1];release({nodeId:'node',res:{tracks:[song(71)]}});await waiting;assert.equal(p.queue.tracks.length,0,'late end-of-track autoplay must not queue against a new human song');
+ auto.manual(p);p.queue.current=seed;await auto.prepare(p,seed,search);await auto.next(p,seed,search);assert.equal(p.queue.tracks.length,1);assert.notEqual(p.queue.tracks[0].info.uri,seed.info.uri);
+ p.queue.tracks=[];auto.manual(p);auto.clear('g');recCount=2;await auto.prepare(p,seed,search);assert.equal(auto.view(p).tracks.length,2,'never invent missing suggestions');
+ auto.suspend(p);await auto.prepare(p,song(80),search);assert.equal(auto.view(p).tracks.length,0,'clear/stop must not regenerate suggestions');
+ auto.manual(p);on=false;await auto.prepare(p,seed,search);assert.equal(auto.view(p).tracks.length,0);on=true;
+ auto.manual(p);const stale=auto.prepare(p,seed,delayed);await new Promise(setImmediate);auto.clear('g');release({nodeId:'node',res:{tracks:[song(90)]}});await stale;assert.equal(auto.view(p).tracks.length,0,'destroy must invalidate in-flight generation');
+ console.log('PASS: five mocked exact-ID resolved suggestions, exact dismissal/version/exclusions, fewer-than-five honesty, human queue priority, generation and end-of-track races, stop/clear/off/destroy, no speculative autoplay entries in queue.');
+})().catch(e=>{console.error(e);process.exitCode=1});

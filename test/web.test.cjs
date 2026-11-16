@@ -1,0 +1,64 @@
+'use strict';
+const assert=require('node:assert/strict');const {createWeb}=require('../src/web');
+const events=new(require('node:events'))();const realFetch=global.fetch;const profileWrites=[];let identity='owner',member=true,visible=true,player=null,calls=[],profileCalls=0;let manager=false;const settings={};
+const song={encoded:'track1',requester:{id:'owner'},info:{title:'Test <script>title</script>',author:'Artist',artworkUrl:'https://example.org/art.jpg',duration:180000,isSeekable:true}};
+const rights={has:()=>visible},memberObj={id:'owner',permissions:{has:()=>manager}};
+const channel={id:'v',guildId:'g',send:async()=>({}),type:2,name:'Music',full:false,permissionsFor:m=>m===memberObj?rights:{has:()=>true}},text={id:'t',guildId:'g',send:async()=>({}),type:0,name:'music-player',permissionsFor:m=>m===memberObj?rights:{has:()=>true}};
+const guild={id:'g',name:'Test server',channels:{cache:new Map([['v',channel],['t',text]])},members:{me:{},fetch:async()=>member?memberObj:Promise.reject(Error('not member'))}};
+const other={...channel,id:'v2',name:'Other voice'};guild.channels.cache.set(other.id,other);
+const ctx={client:{user:{id:'bot'},on:(...x)=>events.on(...x),off:(...x)=>events.off(...x),guilds:{cache:new Map([['g',guild]])}},ownerIds:new Set(['owner']),profile:{applyPresence:()=>profileCalls++,webRead:async(c,g)=>({scope:g||'global'}),webUpdate:async(c,g,u,b)=>{profileWrites.push({g,u,b});return{ok:true}}},lyrics:{find:async()=>({title:'Test song',artist:'Artist',text:'Line one\nLine two'})},A:{seekBy:async(p,n)=>{calls.push('seek:'+n);return !!p.queue.current&&!p.queue.current.info.isStream},setVolume:async(p,v)=>{p.volume=v},skip:async()=>calls.push('skip')},store:{get:g=>settings[g]||{},set:(g,p)=>settings[g]={...settings[g],...p},flush:()=>{}},st:()=>({}),panel:{refreshPanel:async()=>{await new Promise(r=>{const t=setTimeout(r,700);t.unref();});},postPanel:async()=>{}},recovery:{capture:()=>{}},orderedNodes:()=>[{}],searchAny:async()=>({nodeId:'n',res:{tracks:[song]}}),enqueue:async(p,t)=>{p.queue.tracks.push(t);calls.push('add')},lava:{players:new Map(),getPlayer:()=>player,createPlayer:opts=>{player={...opts,node:{id:'n'},volume:80,position:0,repeatMode:'off',options:{voiceChannelId:opts.voiceChannelId},changeVoiceState:async d=>{player.voiceChannelId=d.voiceChannelId;queueMicrotask(()=>events.emit('voiceStateUpdate',{}, {id:'bot',guild:{id:'g'},channelId:d.voiceChannelId}));},queue:{tracks:[],current:null,splice:async function(i,n,a){this.tracks.splice(i,n,...(a||[]));}},connect:async()=>calls.push('connect'),pause:async()=>calls.push('pause')};return player;}}};
+global.fetch=async(url,opts)=>{if(String(url).startsWith('https://discord.com')){let x=String(url).endsWith('/oauth2/@me')?{user:{id:identity},scopes:['identify','guilds']}:String(url).includes('/oauth2/token')?{access_token:'TEST_ONLY'}:String(url).endsWith('/users/@me/guilds')?[{id:'g'}]:{id:identity,username:'Rahul'};return new Response(JSON.stringify(x),{status:200});}return realFetch(url,opts);};
+
+const vm=require('node:vm'),fs=require('node:fs');
+const imageContext={module:{exports:{}},Buffer,require:n=>n==='discord.js'?{ActivityType:{},Routes:{guildMember:(g,u)=>`/guilds/${g}/members/${u}`,user:u=>'/users/'+u}}:n==='./store'?{}:n==='./theme'?{palette:{profile:0x50c9bc}}:require(n)};
+vm.runInNewContext(fs.readFileSync(__dirname+'/../src/profile.js','utf8'),imageContext);
+const imageCheck=imageContext.module.exports.webImage;
+assert.throws(()=>imageCheck('https://127.0.0.1/private'));
+assert.throws(()=>imageCheck('data:image/svg+xml;base64,PHN2Zz4='));
+assert.throws(()=>imageCheck('data:image/png;base64,'+Buffer.from('not an image').toString('base64')));
+assert.equal(imageCheck(null),null);
+const png='data:image/png;base64,'+Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),Buffer.alloc(20)]).toString('base64');assert.equal(imageCheck(png),png);
+console.log('PASS: upload helper denies remote URLs, SVG, mismatched magic and accepts only allowed bounded data images.');
+
+const controlId='123456789012345678';guild.channels.cache.set(controlId,{...text,id:controlId,name:'control'});
+const app=createWeb(ctx,{base:'https://pulse.test',test:true,secret:'TEST_ONLY',clientId:'test'});
+(async()=>{await new Promise(r=>app.server.listen(0,'127.0.0.1',r));const port=app.server.address().port;let cookie='',csrf='';
+async function request(route,data,opts={}){return new Promise((resolve,reject)=>{const req=require('node:http').request({host:'127.0.0.1',port,path:route,method:data?'POST':'GET',headers:{Host:'pulse.test',Origin:'https://pulse.test','Content-Type':'application/json',Cookie:cookie,'X-Pulse-CSRF':csrf,...opts.headers}},r=>{let txt='';r.on('data',x=>txt+=x);r.on('end',()=>{let body;try{body=JSON.parse(txt)}catch{body=txt}resolve({status:r.statusCode,body,cookie:r.headers['set-cookie']?.[0],location:r.headers.location})});});req.on('error',reject);req.end(data?JSON.stringify({guildId:'g',...data}):undefined);});}
+async function signin(){const start=await request('/auth/login');assert.equal(start.status,302);const u=new URL(start.location);assert.equal(u.searchParams.get('scope'),'identify guilds');assert.equal(u.searchParams.get('code_challenge_method'),'S256');const state=u.searchParams.get('state');cookie=start.cookie.split(';')[0];assert.equal((await request('/auth/callback?code=x&state=bad')).status,403);const end=await request('/auth/callback?code=x&state='+state+'&iss=https%3A%2F%2Fdiscord.com');assert.equal(end.status,303);assert.match(end.cookie,/HttpOnly; Secure; SameSite=Lax/);cookie=end.cookie.split(';')[0];const a=await request('/api/guilds');csrf=a.body.csrf;return a;}
+assert.equal((await request('/api/state?guildId=g')).status,401);assert.equal((await request('/api/control',{action:'skip'})).status,401);
+await signin();let state=await request('/api/state?guildId=g');assert.equal(state.status,200);assert.equal(state.body.role,'owner');
+assert.equal((await request('/api/control',{action:'skip'},{headers:{Origin:'https://evil.test'}})).status,403);assert.equal((await request('/api/control',{action:'skip'},{headers:{'X-Pulse-CSRF':'bad'}})).status,403);assert.equal((await request('/api/state?guildId=g',null,{headers:{Host:'65.108.77.37:25906'}})).status,403);
+assert.equal((await request('/api/state?guildId=unrelated')).status,403);assert.equal((await request('/api/search',{query:'https://127.0.0.1/secret'})).status,400);
+const search=await request('/api/search',{query:'song'});assert.equal(search.status,200);assert.equal(search.body.tracks[0].title,song.info.title);assert.equal(search.body.tracks[0].encoded,undefined);
+assert.equal((await request('/api/control',{action:'add',searchId:search.body.id,index:1,voiceChannelId:'v',textChannelId:'t'})).status,400);assert.equal((await request('/api/control',{action:'add',searchId:search.body.id,index:0,voiceChannelId:'bad',textChannelId:'t'})).status,400);
+const addBody={action:'add',searchId:search.body.id,index:0,voiceChannelId:'v',textChannelId:'t',requestId:'add-test-1234567890'};const addStart=performance.now();assert.equal((await request('/api/control',addBody)).status,200);assert.ok(performance.now()-addStart<500,'accepted add must not wait for700ms Discord rendering');const addCount=calls.filter(x=>x==='add').length;assert.equal((await request('/api/control',addBody)).status,200);assert.equal(calls.filter(x=>x==='add').length,addCount,'same request must not add twice');assert.equal((await request('/api/control',{...addBody,index:1})).status,409);console.log('PASS: accepted add does not await delayed Discord render; identical retry deduplicates; reused request ID with changed payload denied.');assert.deepEqual(calls,['connect','add']);assert.ok(app.remoteUntil.get('g')>Date.now());assert.equal((await request('/api/control',{action:'volume',value:900})).status,400);assert.equal((await request('/api/control',{action:'pause'})).status,200);
+assert.equal((await request('/api/owner',{status:'idle',text:'Test'})).status,200);assert.equal(profileCalls,1);
+// Queue moves preserve the current song, reject stale revisions and do not leak encoded IDs.
+player.queue.current={...song,encoded:'playing'};player.queue.tracks=[song,{...song,encoded:'second'},{...song,encoded:'third'}];
+let q=(await request('/api/state?guildId=g')).body.player;
+assert.equal((await request('/api/control',{action:'move',from:0,to:2,key:q.queue[0].key,version:q.queueVersion})).status,200);
+assert.deepEqual(player.queue.tracks.map(t=>t.encoded),['second','third','track1']);assert.equal(player.queue.current.encoded,'playing');
+assert.equal((await request('/api/control',{action:'move',from:0,to:1,key:q.queue[0].key,version:q.queueVersion})).status,409);
+q=(await request('/api/state?guildId=g')).body.player;
+assert.equal((await request('/api/control',{action:'move',from:0,to:8,key:q.queue[0].key,version:q.queueVersion})).status,400);
+player.queue.current.encoded='new-song';assert.equal((await request('/api/control',{action:'move',from:0,to:1,key:q.queue[0].key,version:q.queueVersion})).status,409);
+assert.equal((await request('/api/control',{action:'voice',voiceChannelId:'bad'})).status,403);
+assert.equal((await request('/api/control',{action:'voice',voiceChannelId:'v2'})).status,200);assert.equal(player.voiceChannelId,'v2');
+assert.equal((await request('/api/global-profile')).body.scope,'global');
+assert.equal((await request('/api/global-profile',{name:'New name'})).status,200);assert.equal(profileWrites[0].g,null);
+assert.equal((await request('/api/diagnostics?guildId=g')).status,200);
+assert.equal((await request('/api/diagnostics?guildId=other')).status,403);
+assert.equal((await request('/api/lyrics?guildId=g')).body.text,'Line one\nLine two');
+assert.equal((await request('/api/control',{action:'radio-off'})).status,400);
+assert.equal((await request('/api/control',{action:'radio',voiceChannelId:'v'})).status,400,'removed radio action must be rejected');
+assert.equal((await request('/api/routing',{channelId:controlId},{headers:{'X-Pulse-CSRF':'bad'}})).status,403);
+assert.equal((await request('/api/routing',{channelId:'not-a-channel'})).status,400);
+assert.equal((await request('/api/routing',{channelId:controlId})).status,200);assert.equal(settings.g.controlChannelId,controlId);
+ctx.ownerIds.delete('owner');assert.equal((await request('/api/routing',{channelId:null})).status,403);manager=true;assert.equal((await request('/api/routing',{channelId:null})).status,200);assert.equal(settings.g.controlChannelId,null);manager=false;
+console.log('PASS: web routing CSRF, owner/Manage Server permission, channel validation, saved per-server override and reset.');
+assert.equal((await request('/api/state?guildId=g')).body.role,'member');assert.equal((await request('/api/control',{action:'volume',value:50})).status,200);assert.equal((await request('/api/owner')).status,403);assert.equal((await request('/api/control',{action:'skip'})).status,200);
+assert.equal((await request('/api/global-profile',{name:'Not owner'})).status,403);assert.equal((await request('/api/server-profile?guildId=g')).body.scope,'g');assert.equal((await request('/api/server-profile',{avatar:null})).status,200);assert.equal(profileWrites[1].g,'g');assert.equal((await request('/api/server-profile',{avatar:null})).status,429);assert.equal((await request('/api/server-profile?guildId=other')).status,403);
+visible=false;assert.equal((await request('/api/lyrics?guildId=g')).status,403);assert.equal((await request('/api/diagnostics?guildId=g')).status,403);assert.equal((await request('/api/control',{action:'skip'})).status,403);visible=true;member=false;assert.equal((await request('/api/control',{action:'skip'})).status,403);member=true;
+assert.equal((await request('/api/logout',{})).status,200);assert.equal((await request('/api/state?guildId=g')).status,401);
+console.log('PASS: atomic queue reorder, stale revision/current-song race rejection, confirmed VC move, profile owner/server isolation and cooldown. Mock Discord/audio only.');
+console.log('PASS: OAuth state/cookie binding, PKCE and scopes, unauthenticated denial, secure HttpOnly cookie, CSRF/origin/host checks, guild isolation, channel access, member revocation, equal member full music controls, owner-only global presence, URL guard, no encoded tracks exposed, remote VC exemption and logout. Mock Discord/audio only.');app.close();})().catch(e=>{console.error(e);app.close();process.exitCode=1;});

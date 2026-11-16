@@ -1,0 +1,14 @@
+'use strict';
+const assert=require('node:assert/strict'),related=require('../src/related');
+const song=(title,author='Bernard Herrmann',extra={})=>({encoded:Math.random().toString(),info:{title,author,uri:'https://example.test/'+encodeURIComponent(title),duration:240000,...extra}});
+const seed=song('Taxi Driver - Main Theme');
+assert.ok(related.qualify(seed,song('Diary of a Taxi Driver')));
+assert.equal(related.qualify(seed,song('Popular dance hit','Unrelated artist')),null);
+assert.equal(related.qualify(seed,song('Taxi Driver - Main Theme (Official Audio)','Another uploader')),null);
+assert.ok(related.qualify(song('Rainy night lofi beats','Independent producer'),song('Soft lofi study beats','Another producer')));
+assert.equal(related.qualify(song('Quiet ambient piano','Composer A'),song('Extreme metal riffs','Composer B')),null);
+assert.equal(related.qualify(seed,song('News live','X',{isStream:true})),null);
+assert.equal(related.qualify(seed,{info:{title:'Unresolved'}}),null);
+assert.equal(related.identity(song("Bernard Herrmann - I Still Can't Sleep - Taxi Driver"),seed),related.identity(song("I Still Can't Sleep / They Cannot Touch Her (Betsy's Theme)"),seed));
+assert.ok(related.queries(seed).some(x=>x.includes('taxi driver')));
+console.log('PASS: legacy metadata matcher regression cases only; not active autoplay quality evidence.');
